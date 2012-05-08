@@ -1,4 +1,4 @@
-PROGRAM exercise1
+PROGRAM leonardJones
   ! A program to Compute the effects of the Lennard-Jones
   ! potential
   ! To compile: gfortran exercise1.f90 /home/delft03/XPS/lib/libxps.a /usr/lib/libX11.so
@@ -27,17 +27,15 @@ REAL*8, DIMENSION(N):: rF=0.d0,rf_add
 REAL*8, DIMENSION(3):: Fij, Dij, momentum_cur
 REAL*8:: Vol
 
+
+REAL*8 :: P_dot,pressure
+
 !===========================================
 !|||||||||||||  DATA VARIABLES |||||||||||||
 !===========================================
 
 REAL*8 :: temp,temp_cur, sqdist_cur, temp_avg, temp_avg_var
-REAL*8 :: running_press_p
-REAL*8:: running_press_vir, cur_press_vir, cur_press_p, cur_press_id
-REAL*8:: press_vir_avg, press_vir_avg_var
-REAL*8, DIMENSION(iteration_len/avg_len):: temp_dat, press_vir_dat, press_p_dat, press_id_dat
-REAL*8, DIMENSION(800)::pair_hist,pair_hist_ideal
-REAL*8, DIMENSION(iteration_len)::sqdist_dat
+REAL*8, DIMENSION(iteration_len/avg_len) :: temp_dat
 REAL*8, DIMENSION(eq_len/eq_len_avg)::temp_eq_dat
 REAL*8, DIMENSION(eq_len*6+700*6+iteration_len):: temp_cur_dat
 
@@ -51,14 +49,10 @@ REAL*8, DIMENSION(eq_len*6+700*6+iteration_len):: temp_cur_dat
   min_sep =1.122462048d0*(1/density)**(.333)
   box_size=cubes*1.5874010519681996d0*(1/density)**(.333)
   maxD = (box_size)
- 
-
+  P_dot = 0
 
   CALL Initialize  
-  
   CALL Update_Forces
-
-  !pair_hist_ideal = pair_hist*1000
  
 !====================================
 !||||| Temperature scaling|||||||||||
@@ -88,15 +82,15 @@ do checks= 1,5          !Outer loop for temperature rescaling
 end do 
 
 !Set running total variables to 0 because equilibration phase=garbage data
-pair_hist = 0
-pos_init=pos
-running_press_vir=0
+
 
 !==================================
 !|||||| Main Loop||||||||||||||||||
 !==================================
 
 DO t = 1, iteration_len
+  !print*, t
+  P_dot=0
 
   ! Evaluate Equations of motion
   CALL MoveParticles
@@ -106,65 +100,41 @@ DO t = 1, iteration_len
   Kin = Kinetic(vel)
   temp_cur = Temperature(Kin)
   energy = Kin + Potij
-  cur_press_id = press_id(temp_cur)
-  sqdist_cur = sum((pos_unbound-pos_init)**2.0d0)/DFLOAT(N)
-  cur_press_vir= (running_press_vir+N*temp_cur)/(box_size**3.0d0)
 
-
+  CALL getPressure()
   !Write/Average appropriate quantities:
-  
-  !write(22,*) Kin/N, Potij/N, (Kin+Potij)/N
-  !CALL average(temp_cur,temp_dat,t,avg_len)
-  CALL average(cur_press_vir, press_vir_dat, t, avg_len)
-  CALL average(cur_press_p, press_p_dat,t,avg_len)
-  !CALL average(cur_press_id, press_id_dat,t,avg_len)
-  !sqdist_dat(t) =sqdist_cur
-  !temp_cur_dat(k) = temp_cur  
-  !k=k+1
-  !running_press_vir=0
 
 END DO
 
+PRINT*, pressure
 !CALL EndPlot()
 
 !===========================================
 !|||||||| Post-Program calculations|||||||||
 !===========================================
-temp_avg = SUM(temp_dat)/SIZE(temp_dat)
-temp_avg_var = var(temp_dat)
-
-press_vir_avg = SUM(press_vir_dat)/SIZE(press_vir_dat)
-press_vir_avg_var = var(press_vir_dat)
-
-cur_press_p = running_press_p/(iteration_len)
-!cur_press_id = N*temp_cur/(box_size**3.0d0)
-
-!CALL Fix_pair_hist
+!temp_avg = SUM(temp_dat)/SIZE(temp_dat)
+!temp_avg_var = var(temp_dat)
 
 !=================================
 !||||||| WRITE OUTPUTS||||||||||||
 !=================================
-
-
-WRITE(23,fmt="(4(f12.6,1x))") press_vir_avg, press_vir_avg_var, temp_avg, temp_avg_var
-!WRITE(24,fmt="(1(f12.6,1x))") press_id_dat
-WRITE(25,fmt="(1(f12.6,1x))") press_p_dat
-!WRITE(26,fmt="(1(f12.6,1x))") pair_hist
-!WRITE(27,fmt="(1(f12.6,1x))") sqdist_dat
-!WRITE(28,fmt="(1(f12.6,1x))") pair_hist_ideal
-!WRITE(31,fmt="(1(f12.6,1x))") temp_cur_dat
-!WRITE(33,fmt="(1(f12.6,1x))") temp_dat
-!WRITE(32,*) temp_avg, temp_avg_var
 
 PRINT*, "Done"
 
 
 !=================================
 !||||||||SUBROUTINES||||||||||||||
-!==========================
+!=================================
 
 CONTAINS
 
+SUBROUTINE getPressure
+REAL*8::Pdot,P_reduced,P
+Pdot = sum( Dij*Fij,2)
+P_reduced = 1 - 1/(3*N*Temp_cur)*Pdot
+Pressure = P_reduced*temp_cur/density
+
+END SUBROUTINE
 
 SUBROUTINE inputs     !User submitted input parameters
 
@@ -185,23 +155,6 @@ SUBROUTINE Initialize
   
   CALL init_velocities(Vel,N,temp)
 
-  !Open relevant ouput files
-  !  open(unit=22,status='replace',file='energy.dat')  
-  !  open(unit=23,status='old',file='press_vir.dat',position="Append") 
-  !  open(unit=24,status='replace',file='press_id.dat') 
-  !  open(unit=25,status='replace',file='press_p.dat')
-  !  open(unit=26,status='replace',file='pair_dist2.dat') 
-  !  open(unit=27,status='replace',file='sqdist.dat')
-  !  open(unit=28,status='replace',file='pair_dist2_ideal.dat')
-  !  OPEN(unit=31,status='replace',file='temp.dat')
-  !  OPEN(unit=33,status='replace',file='temp_avg.dat')
-  !  OPEN(unit=33,status='replace',file='temp_avg2.dat')
-
-  !Initialize graphics
-  !  CALL InitPlotF('lightblue', 800, 800, 'out.ps', 1)
-  !  CALL PutStopButton()
-  !  CALL Framing(-0.1D0*Box_Size, -0.1D0*Box_Size, 1.1D0*Box_Size, 1.1D0*Box_Size)
-
 END SUBROUTINE Initialize
 
 
@@ -214,9 +167,6 @@ SUBROUTINE MoveParticles
   call update_forces
   vel=vel+FTotal*T_step/2.0d0
  
-  !cur_press_p = press_p(vel,pos)
-  running_press_p = running_press_p + press_p(vel,pos) !2.0d0*dot_product(vel(1,:),int(Pos(1,:)/(box_size)))
-
   !Boundary Conditions
   Pos = Modulo(Pos, box_size)
 
@@ -246,9 +196,8 @@ SUBROUTINE Update_Forces
       Ftotal(:,j) = Ftotal(:,j) - Fij;
       
       Potij = Potij + Potential(Mag_Dij);
-   
-      !CALL update_pair_hist(pair_hist, Mag_Dij,maxD)      
-      !CALL press_vir(Dij, Fij,running_press_vir)
+      
+      P_dot = P_dot + DOT_PRODUCT(Dij,Fij)
 
     END DO
   END DO
@@ -322,7 +271,6 @@ subroutine init_velocities( v_array, n,temp)
   v_array(i,:)=v_array(i,:)-sum(v_array(i,:))/dfloat(n)
  end do   
 
- 
 end subroutine !init_velocities
  
 subroutine random !Random number generation
@@ -374,84 +322,12 @@ FUNCTION Kinetic(Velocities)
   Kinetic = sum(Velocities**2.0d0)/2.d0
 END FUNCTION !Kinetic
 
-FUNCTION sq_dist(p_new,p_old)
-  IMPLICIT NONE 
-  REAL*8 :: sq_dist 
-  REAL*8,DIMENSION(3):: p_new,p_old
-  
-  sq_dist=sum((P_new-P_old)**2.0d0)
-END FUNCTION
-
-SUBROUTINE Get_Momentum(Total_Momentum, Velocities)
-  REAL*8, INTENT(OUT), DIMENSION(3) :: Total_Momentum
-  REAL*8, INTENT(IN), DIMENSION(3,N) :: Velocities
-  
-  Total_Momentum(1) = sum(Velocities(1,:))
-  Total_Momentum(2) = sum(Velocities(2,:))
-  Total_Momentum(3) = sum(Velocities(3,:))
-END SUBROUTINE !Get_Momentum
-
 FUNCTION Potential(Distance_sq) ! Potential of two particles
   REAL*8 :: Potential
   REAL*8:: Distance_sq
   
   Potential = 4.d0/(Distance_sq**6.0d0) - 4.d0/(Distance_sq**3.0d0)
 END FUNCTION !Potential
-
-SUBROUTINE press_vir(Rij, Forceij, total)
-  IMPLICIT NONE
-  REAL*8,DIMENSION(:):: Rij, Forceij
-  REAL*8::total
-
-  total = total +DOT_PRODUCT( Rij,Forceij)/(3.0d0)
-END SUBROUTINE
-
-FUNCTION press_p(velocities,positions)
-  IMPLICIT NONE
-  REAL*8:: press_p
-  REAL*8:: ptransfer
-  REAL*8, DIMENSION(:,:) :: Velocities, positions
-
-  ptransfer =2.0d0*sum(Velocities(1,:)*INT(positions(1,:)/box_size))
- 
-  press_p =ptransfer/(box_size**2.0d0*T_step)
-
-END FUNCTION !press_p
-
-FUNCTION press_id(temperature)
-  IMPLICIT NONE
-  REAL*8::press_id,temperature
- 
-  press_id = N*temperature/(box_size**3.0d0)
-END FUNCTION !press_id
-
-SUBROUTINE update_pair_hist(hist,Rij2, maxR)
-  IMPLICIT NONE
-  REAL*8, DIMENSION(:):: hist
-  REAL*8:: maxR, Rij2
-  INTEGER:: hist_len, loc
-
-  hist_len = SIZE(hist)
-  loc = CEILING((SQRT(Rij2)*hist_len/(maxR)))+1
- 
- !print*, loc
-  hist(loc) = hist(loc) + .000001d0
-
-END SUBROUTINE !update_pair_hist  
-
-SUBROUTINE fix_pair_hist
-  IMPLICIT NONE
-  bin_width = maxD/SIZE(Pair_hist)
-  R=0
-
-  DO t=1,SIZE(Pair_hist) 
-    R = R+bin_width
-    Vol = 4.0d0*Pi*bin_width*R**2.0d0
-    Pair_hist(t)=Pair_hist(t)/Vol
-    pair_hist_ideal(t)= pair_hist_ideal(t)/Vol 
-  END DO 
-
-END SUBROUTINE
 
 FUNCTION var(dat)
   IMPLICIT NONE
@@ -473,4 +349,4 @@ FUNCTION var(dat)
 
 END FUNCTION !var
 
-end program exercise1
+end program leonardJones
