@@ -11,10 +11,13 @@ IMPLICIT NONE
 INTEGER, PARAMETER :: iteration_len= 2000,avg_len=20,cubes =4, N = 4*cubes**3 !Number of cubes in lattice and number of particles
 INTEGER, PARAMETER :: eq_len=500, eq_len_avg=33
 REAL*8, PARAMETER :: Pi = datan(1.0d0)*4.0d0
+INTEGER,PARAMETER :: numInsertions=20
 
 !==========================================
 !||||||||||| VARIABLES ||||||||||||||||||||
 !==========================================
+REAL*8 :: numSigmas
+REAL*8 :: sigma
 REAL*8 :: density
 REAL*8 :: bin_width,R
 REAL*8 :: box_size,min_sep
@@ -25,9 +28,11 @@ REAL*8, DIMENSION(3,N):: Pos,Vel, Ftotal
 REAL*8, DIMENSION(3,N):: pos_init, pos_unbound
 REAL*8, DIMENSION(N):: rF=0.d0,rf_add
 REAL*8, DIMENSION(3):: Fij, Dij, momentum_cur
+REAL*8, DIMENSION(3) :: chemInitPos
+REAL*8, ALLOCATABLE::chemPos(:,:),chemFtotal(:,:)
 REAL*8:: Vol
-
-
+INTEGER ::newTotalN
+INTEGER :: numSigmaLoops
 REAL*8 :: P_dot,pressure
 
 !===========================================
@@ -39,7 +44,7 @@ REAL*8, DIMENSION(iteration_len/avg_len) :: temp_dat
 REAL*8, DIMENSION(eq_len/eq_len_avg)::temp_eq_dat
 REAL*8, DIMENSION(eq_len*6+700*6+iteration_len):: temp_cur_dat
 
-REAL*8, DIMENSION(iteration_len/avg_len) :: pressure_dat
+REAL*8, DIMENSION(iteration_len) :: pressure_dat
 !====================================
 !|||||| Pre-program initialization|||
 !====================================
@@ -89,22 +94,33 @@ end do
 !|||||| Main Loop||||||||||||||||||
 !==================================
 
-DO t = 1, iteration_len
-  !print*, t
-  P_dot=0
+DO l = 1, numInsertions
+  DO t = 1, iteration_len
+    !print*, t
+    P_dot=0
 
-  ! Evaluate Equations of motion
-  CALL MoveParticles
-  !CALL PlotParticles
+    ! Evaluate Equations of motion
+    CALL MoveParticles
+    !CALL PlotParticles
 
-  !Update Quantities of Interest
-  Kin = Kinetic(vel)
-  temp_cur = Temperature(Kin)
-  energy = Kin + Potij
+    !Update Quantities of Interest
+    Kin = Kinetic(vel)
+    temp_cur = Temperature(Kin)
+    energy = Kin + Potij
 
-  CALL getPressure()
-  !Write/Average appropriate quantities:
-  pressure_dat(t) = Pressure
+    CALL getPressure()
+    !Write/Average appropriate quantities:
+    pressure_dat(t) = Pressure
+  END DO
+
+  CALL findPosShell()
+  DO t=1, numSigmaLoops
+    sigma =sigma+.1   !Fix me later!! 
+    CALL Relax()
+  END DO
+
+  DEALLOCATE(chemPos)
+  DEALLOCATE(chemFtotal)
 END DO
 
 
@@ -130,6 +146,20 @@ PRINT*, "Done"
 
 CONTAINS
 
+SUBROUTINE relax
+  IMPLICIT NONE
+  INTEGER ::i
+
+  DO i=1,200
+    !Calculate convex Hull here
+
+    DO j=1,20
+      CALL chemMoveParticles
+    END DO
+  END DO
+  
+END SUBROUTINE
+
 SUBROUTINE getPressure
 REAL*8::Pdot,P_reduced,P
 Pdot = sum( Dij*Fij,2)
@@ -147,6 +177,10 @@ SUBROUTINE inputs     !User submitted input parameters
   print*, 'INPUT SIMULATION TEMPERATURE'
   read*, temp
   print*
+  
+  print*, 'INPUT SIMULATION sigma'
+  read*, numSigmas
+  print*
 END SUBROUTINE !Inputs
 
 
@@ -159,6 +193,43 @@ SUBROUTINE Initialize
 
 END SUBROUTINE Initialize
 
+SUBROUTINE findPosShell
+  IMPLICIT NONE
+  INTEGER,DIMENSION(N) :: inShell
+  REAL*8, DIMENSION(3) :: Dist
+  REAL*8:: sigma2, Dist2
+  INTEGER ::i,k
+
+  inShell =0
+  sigma2 = numSigmas**2
+
+  !Pick initial position of new particle
+  CALL Random_Number(cheminitPos)
+  cheminitPos= cheminitPos*box_Size
+
+  !Find the particles that are within sigma of new position
+  DO i=1, N 
+      Dist = Pos(:,i) - cheminitPos
+      Dist = Dist - NINT(Dist/box_size)*box_size
+      Dist2 = DOT_PRODUCT(Dist,Dist)
+      IF(Dist2.LT.sigma2) THEN
+        inShell(i) =1
+      END IF
+  END DO
+
+  newTotalN= SUM(inShell)
+  ALLOCATE(chemPos(3,newTotalN))
+  ALLOCATE(chemFtotal(3,newTotalN))
+  !Make new array of positions
+  k=0
+  DO i=1, N
+    IF ( inShell(i).EQ.1) THEN
+      k=k+1
+      chemPos(:,k)= pos(:,i)
+    END IF
+  END DO 
+
+END SUBROUTINE
 
 SUBROUTINE MoveParticles
 
@@ -174,6 +245,19 @@ SUBROUTINE MoveParticles
 
 END SUBROUTINE MoveParticles
 
+SUBROUTINE ChemMoveParticles
+  !Change these positions to smaller list of positions
+  !Integrator (verlet)
+  vel=vel+FTotal*T_step/2.d0
+  Pos = Pos + Vel*T_step;
+  Pos_unbound = Pos_unbound + Vel*T_step
+  call chem_update_forces
+  vel=vel+FTotal*T_step/2.0d0
+ 
+  !Boundary Conditions
+  Pos = Modulo(Pos, box_size)
+
+END SUBROUTINE ChemMoveParticles
 
 !SUBROUTINE PlotParticles
 !  INTEGER :: I
@@ -198,13 +282,60 @@ SUBROUTINE Update_Forces
       Ftotal(:,j) = Ftotal(:,j) - Fij;
       
       Potij = Potij + Potential(Mag_Dij);
-      
+     
+
       P_dot = P_dot + DOT_PRODUCT(Dij,Fij)
 
     END DO
   END DO
 END SUBROUTINE Update_Forces
 
+SUBROUTINE chem_Update_Forces
+  IMPLICIT NONE
+  INTEGER ::i,j
+  REAL*8:: sigma12, sigma6
+
+  !For each particle get total forces from
+  ! Pressure
+  ! Interparticle Forces
+  ! New center particle with adjusted potential
+
+  !Regular interparticle forces
+  Ftotal = 0.d0
+  Potij = 0.d0
+  Do i = 1,newTotalN-1
+    Do j = i+1,newTotalN
+      
+      Dij = chemPos(:,i) - chemPos(:,j)
+      Dij = Dij - NINT(dij/box_size)*box_size
+      
+      Mag_Dij = DOT_PRODUCT(Dij, Dij) 
+      Fij = (48.d0/(Mag_Dij**7.0d0)-24.d0/(Mag_Dij**4.0d0))*Dij
+        
+      chemFtotal(:,i) = chemFtotal(:,i) + Fij;
+      chemFtotal(:,j) = chemFtotal(:,j) - Fij;
+
+    END DO
+  END DO
+
+  !Adjusted potential center particle
+  sigma12= sigma**12
+  sigma6 = sigma**6
+  Do i = 1,newTotalN
+    
+    Dij = chemPos(:,i) - cheminitPos(:)
+    Dij = Dij - NINT(dij/box_size)*box_size
+    
+    Mag_Dij = DOT_PRODUCT(Dij, Dij)
+    Fij = (48.d0*sigma12/(Mag_Dij)**7.0d0-24.d0*sigma6/(Mag_Dij)**4.0d0)*Dij
+      
+    chemFtotal(:,i) = chemFtotal(:,i) + Fij;
+    
+  END DO
+
+  !Pressure term
+
+END SUBROUTINE
 
 subroutine init_positions( p_array, sep0 , N ,cubes)
   !Initialize all positions
@@ -322,6 +453,14 @@ FUNCTION Potential(Distance_sq) ! Potential of two particles
   
   Potential = 4.d0/(Distance_sq**6.0d0) - 4.d0/(Distance_sq**3.0d0)
 END FUNCTION !Potential
+
+subroutine average(observable, datastore, it_count, length_average) !takes observables Ai, divides it by lengt_average and stores it in array "datastore". 
+ REAL*8 :: observable 
+ REAL*8, DIMENSION(100) :: datastore
+ INTEGER :: loc,it_count, length_average
+  loc = (it_count-1)/length_average+1
+  datastore(loc) = datastore(loc) + observable / length_average
+end subroutine average
 
 FUNCTION blockAverage(dat)
   IMPLICIT NONE
