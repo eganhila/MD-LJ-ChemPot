@@ -39,6 +39,7 @@ REAL*8, DIMENSION(iteration_len/avg_len) :: temp_dat
 REAL*8, DIMENSION(eq_len/eq_len_avg)::temp_eq_dat
 REAL*8, DIMENSION(eq_len*6+700*6+iteration_len):: temp_cur_dat
 
+REAL*8, DIMENSION(iteration_len/avg_len) :: pressure_dat
 !====================================
 !|||||| Pre-program initialization|||
 !====================================
@@ -103,22 +104,23 @@ DO t = 1, iteration_len
 
   CALL getPressure()
   !Write/Average appropriate quantities:
-
+  pressure_dat(t) = Pressure
 END DO
 
-PRINT*, pressure
-!CALL EndPlot()
 
 !===========================================
 !|||||||| Post-Program calculations|||||||||
 !===========================================
-!temp_avg = SUM(temp_dat)/SIZE(temp_dat)
-!temp_avg_var = var(temp_dat)
+
 
 !=================================
 !||||||| WRITE OUTPUTS||||||||||||
 !=================================
 
+PRINT*,"Current Pressure: "
+PRINT*, pressure
+PRINT*,"Averaged Pressure: " 
+PRINT*, blockAverage(pressure_dat)
 PRINT*, "Done"
 
 
@@ -173,12 +175,12 @@ SUBROUTINE MoveParticles
 END SUBROUTINE MoveParticles
 
 
-SUBROUTINE PlotParticles
-  INTEGER :: I
-  DO I=1, N
-    CALL SetPoint(Pos(1,I), Pos(2,I))
-  END DO
-END SUBROUTINE PlotParticles
+!SUBROUTINE PlotParticles
+!  INTEGER :: I
+!  DO I=1, N
+!    CALL SetPoint(Pos(1,I), Pos(2,I))
+!  END DO
+!END SUBROUTINE PlotParticles
 
 SUBROUTINE Update_Forces
   Ftotal = 0.d0
@@ -299,14 +301,6 @@ subroutine rescaletemp(avg_temp)
   vel = (Temp/avg_temp)**(0.5d0)*vel;
 end subroutine
 
-subroutine average(observable, datastore, it_count, length_average) !takes observables Ai, divides it by lengt_average and stores it in array "datastore". 
- REAL*8 :: observable 
- REAL*8, DIMENSION(100) :: datastore
- INTEGER :: loc,it_count, length_average
-  loc = (it_count-1)/length_average+1
-  datastore(loc) = datastore(loc) + observable / length_average
-end subroutine average
-
 FUNCTION Temperature(Kin_Energy)
   IMPLICIT NONE
   REAL*8 :: Temperature
@@ -328,6 +322,29 @@ FUNCTION Potential(Distance_sq) ! Potential of two particles
   
   Potential = 4.d0/(Distance_sq**6.0d0) - 4.d0/(Distance_sq**3.0d0)
 END FUNCTION !Potential
+
+FUNCTION blockAverage(dat)
+  IMPLICIT NONE
+  REAL*8, DIMENSION(:):: dat
+  REAL*8 :: blockAverage
+  INTEGER :: corTime, numBlocks
+  REAL*8 :: avg
+  INTEGER :: i,j,k
+  
+  corTime = 20
+  numBlocks = SIZE(dat)/corTime
+  k = 0
+
+  DO i = 1,numBlocks
+    DO j=1,corTime
+      k=k+1
+      avg = avg+dat(k)/corTime
+    END DO
+    blockAverage = blockAverage + avg/numBlocks
+    avg = 0
+  END DO
+
+END FUNCTION
 
 FUNCTION var(dat)
   IMPLICIT NONE
