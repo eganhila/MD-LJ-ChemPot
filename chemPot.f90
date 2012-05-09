@@ -8,15 +8,16 @@ IMPLICIT NONE
 !=========================================
 !|||||||||| PARAMETERS ||||||||||||||||||
 !=========================================
-INTEGER, PARAMETER :: iteration_len= 2000,avg_len=20,cubes =4, N = 4*cubes**3 !Number of cubes in lattice and number of particles
-INTEGER, PARAMETER :: eq_len=500, eq_len_avg=33
+INTEGER, PARAMETER :: iteration_len= 1000,avg_len=20,cubes =3, N = 4*cubes**3 !Number of cubes in lattice and number of particles
+INTEGER, PARAMETER :: eq_len=500, eq_len_avg=20
 REAL*8, PARAMETER :: Pi = datan(1.0d0)*4.0d0
-INTEGER,PARAMETER :: numInsertions=20
+INTEGER,PARAMETER :: numInsertions=1
+INTEGER,PARAMETER :: insertionsPerShot=500
 
 !==========================================
 !||||||||||| VARIABLES ||||||||||||||||||||
 !==========================================
-REAL*8 :: numSigmas
+REAL*8 :: radiusShell
 REAL*8 :: sigma
 REAL*8 :: density
 REAL*8 :: bin_width,R
@@ -29,11 +30,15 @@ REAL*8, DIMENSION(3,N):: pos_init, pos_unbound
 REAL*8, DIMENSION(N):: rF=0.d0,rf_add
 REAL*8, DIMENSION(3):: Fij, Dij, momentum_cur
 REAL*8, DIMENSION(3) :: chemInitPos
-REAL*8, ALLOCATABLE::chemPos(:,:),chemFtotal(:,:)
+REAL*8, ALLOCATABLE::chemPos(:,:),chemFtotal(:,:),chemVel(:,:)
 REAL*8:: Vol
 INTEGER ::newTotalN
 INTEGER :: numSigmaLoops
 REAL*8 :: P_dot,pressure
+
+REAL*8 :: curB, curB2
+REAL*8 :: curBlockB, curBlockB2
+
 
 !===========================================
 !|||||||||||||  DATA VARIABLES |||||||||||||
@@ -43,7 +48,6 @@ REAL*8 :: temp,temp_cur, sqdist_cur, temp_avg, temp_avg_var
 REAL*8, DIMENSION(iteration_len/avg_len) :: temp_dat
 REAL*8, DIMENSION(eq_len/eq_len_avg)::temp_eq_dat
 REAL*8, DIMENSION(eq_len*6+700*6+iteration_len):: temp_cur_dat
-
 REAL*8, DIMENSION(iteration_len) :: pressure_dat
 !====================================
 !|||||| Pre-program initialization|||
@@ -56,6 +60,8 @@ REAL*8, DIMENSION(iteration_len) :: pressure_dat
   box_size=cubes*1.5874010519681996d0*(1/density)**(.333)
   maxD = (box_size)
   P_dot = 0
+  curB =0
+  curB2 =0
 
   CALL Initialize  
   CALL Update_Forces
@@ -95,11 +101,12 @@ end do
 !==================================
 
 DO l = 1, numInsertions
+  !Loop to get the program to equilibrium state
   DO t = 1, iteration_len
     !print*, t
     P_dot=0
 
-    ! Evaluate Equations of motion
+    !!!!! ! Evaluate Equations of motion
     CALL MoveParticles
     !CALL PlotParticles
 
@@ -113,14 +120,21 @@ DO l = 1, numInsertions
     pressure_dat(t) = Pressure
   END DO
 
-  CALL findPosShell()
-  DO t=1, numSigmaLoops
-    sigma =sigma+.1   !Fix me later!! 
-    CALL Relax()
-  END DO
+  !!! Try To insert a particle 
+  print*, l
+  CALL tryInsertions()
+  curB = curB + curBlockB/numInsertions
+  curB2 = curB2 + curBlockB2/numInsertions
 
-  DEALLOCATE(chemPos)
-  DEALLOCATE(chemFtotal)
+  !CALL findPosShell()
+  !DO t=1, numSigmaLoops
+  !  sigma =sigma+.1   !Fix me later!! 
+  !  CALL Relax()
+  !END DO
+
+  !DEALLOCATE(chemPos)
+  !DEALLOCATE(chemFtotal)
+
 END DO
 
 
@@ -133,11 +147,11 @@ END DO
 !||||||| WRITE OUTPUTS||||||||||||
 !=================================
 
-PRINT*,"Current Pressure: "
-PRINT*, pressure
-PRINT*,"Averaged Pressure: " 
-PRINT*, blockAverage(pressure_dat)
-PRINT*, "Done"
+Print*, "Average Energy Change: "
+print*, curB
+print*, "Energy variance: "
+print*, curB2-curB**2
+
 
 
 !=================================
@@ -145,6 +159,32 @@ PRINT*, "Done"
 !=================================
 
 CONTAINS
+
+SUBROUTINE tryInsertions
+  IMPLICIT NONE
+  REAL*8, DIMENSION(3) :: trialPos,dist
+  REAL*8 :: curPot, mag_dist
+
+  curBlockB =0
+  curBlockB2 = 0
+
+  DO j=1, insertionsPerShot
+    CALL Random_Number(trialPos)
+    trialPos= trialPos*box_size
+    curPot = 0
+
+    DO i= 1, N 
+      Dist = Pos(:,i) - trialPos(:)
+      Dist = Dist - NINT(dij/box_size)*box_size
+    
+      Mag_Dist = DOT_PRODUCT(Dist, Dist)
+      curPot = curPot + Potential(Mag_dist)
+    END DO
+
+    curBlockB = curBlockB + exp(-curPot/temp_cur)/insertionsPerShot
+    curBlockB2 = curBlockB2 + exp(-curPot/temp_cur)**2/insertionsPerShot
+  END DO 
+END SUBROUTINE
 
 SUBROUTINE relax
   IMPLICIT NONE
@@ -161,15 +201,13 @@ SUBROUTINE relax
 END SUBROUTINE
 
 SUBROUTINE getPressure
-REAL*8::Pdot,P_reduced,P
-Pdot = sum( Dij*Fij,2)
-P_reduced = 1 - 1/(3*N*Temp_cur)*Pdot
-Pressure = P_reduced*temp_cur/density
-
+  REAL*8::Pdot,P_reduced,P
+  Pdot = sum( Dij*Fij)
+  P_reduced = 1 - 1/(3*N*Temp_cur)*Pdot
+  Pressure = P_reduced*temp_cur/density
 END SUBROUTINE
 
 SUBROUTINE inputs     !User submitted input parameters
-
   PRINT*, "Input simulation density:"
   READ*, density
   print*,
@@ -179,18 +217,15 @@ SUBROUTINE inputs     !User submitted input parameters
   print*
   
   print*, 'INPUT SIMULATION sigma'
-  read*, numSigmas
+  read*, radiusShell
   print*
 END SUBROUTINE !Inputs
 
 
 SUBROUTINE Initialize
-
   CALL random
   CALL init_positions(Pos, min_sep, N, cubes)
-  
   CALL init_velocities(Vel,N,temp)
-
 END SUBROUTINE Initialize
 
 SUBROUTINE findPosShell
@@ -201,7 +236,7 @@ SUBROUTINE findPosShell
   INTEGER ::i,k
 
   inShell =0
-  sigma2 = numSigmas**2
+  sigma2 = RadiusShell**2
 
   !Pick initial position of new particle
   CALL Random_Number(cheminitPos)
@@ -219,7 +254,9 @@ SUBROUTINE findPosShell
 
   newTotalN= SUM(inShell)
   ALLOCATE(chemPos(3,newTotalN))
+  ALLOCATE(chemVel(3,newTotalN))
   ALLOCATE(chemFtotal(3,newTotalN))
+  
   !Make new array of positions
   k=0
   DO i=1, N
@@ -228,11 +265,9 @@ SUBROUTINE findPosShell
       chemPos(:,k)= pos(:,i)
     END IF
   END DO 
-
 END SUBROUTINE
 
 SUBROUTINE MoveParticles
-
   !Integrator (verlet)
   vel=vel+FTotal*T_step/2.d0
   Pos = Pos + Vel*T_step;
@@ -242,21 +277,16 @@ SUBROUTINE MoveParticles
  
   !Boundary Conditions
   Pos = Modulo(Pos, box_size)
-
 END SUBROUTINE MoveParticles
 
 SUBROUTINE ChemMoveParticles
-  !Change these positions to smaller list of positions
-  !Integrator (verlet)
   vel=vel+FTotal*T_step/2.d0
-  Pos = Pos + Vel*T_step;
-  Pos_unbound = Pos_unbound + Vel*T_step
+  chemPos = chemPos + chemVel*T_step;
   call chem_update_forces
-  vel=vel+FTotal*T_step/2.0d0
+  chemVel=chemVel+FTotal*T_step/2.0d0
  
   !Boundary Conditions
-  Pos = Modulo(Pos, box_size)
-
+  chemPos = Modulo(Pos, box_size)
 END SUBROUTINE ChemMoveParticles
 
 !SUBROUTINE PlotParticles
@@ -267,6 +297,7 @@ END SUBROUTINE ChemMoveParticles
 !END SUBROUTINE PlotParticles
 
 SUBROUTINE Update_Forces
+  REAL*8::Mag2, Mag4, Mag7
   Ftotal = 0.d0
   Potij = 0.d0
   Do i = 1,N-1
@@ -275,8 +306,12 @@ SUBROUTINE Update_Forces
       Dij = Pos(:,i) - Pos(:,j)
       Dij = Dij - NINT(dij/box_size)*box_size
       
-      Mag_Dij = DOT_PRODUCT(Dij, Dij) 
-      Fij = (48.d0/(Mag_Dij**7.0d0)-24.d0/(Mag_Dij**4.0d0))*Dij
+      Mag_Dij = DOT_PRODUCT(Dij, Dij)
+      Mag2=Mag_Dij*Mag_Dij
+      Mag4=Mag2*Mag2
+      Mag7=Mag4*Mag2*Mag_Dij
+
+      Fij = (48.d0/(Mag7)-24.d0/(Mag4))*Dij
         
       Ftotal(:,i) = Ftotal(:,i) + Fij;
       Ftotal(:,j) = Ftotal(:,j) - Fij;
@@ -449,14 +484,15 @@ END FUNCTION !Kinetic
 
 FUNCTION Potential(Distance_sq) ! Potential of two particles
   REAL*8 :: Potential
-  REAL*8:: Distance_sq
-  
-  Potential = 4.d0/(Distance_sq**6.0d0) - 4.d0/(Distance_sq**3.0d0)
+  REAL*8:: Distance_sq,D3,D6
+  D3 = Distance_sq*Distance_sq
+  D6 = D3*D3
+  Potential = 4.d0/(D6) - 4.d0/(D3)
 END FUNCTION !Potential
 
 subroutine average(observable, datastore, it_count, length_average) !takes observables Ai, divides it by lengt_average and stores it in array "datastore". 
  REAL*8 :: observable 
- REAL*8, DIMENSION(100) :: datastore
+ REAL*8, DIMENSION(:) :: datastore
  INTEGER :: loc,it_count, length_average
   loc = (it_count-1)/length_average+1
   datastore(loc) = datastore(loc) + observable / length_average
