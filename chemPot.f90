@@ -13,13 +13,13 @@ INTEGER, PARAMETER :: eq_len=500, eq_len_avg=20
 REAL*8, PARAMETER :: Pi = datan(1.0d0)*4.0d0
 INTEGER,PARAMETER :: numInsertions=1
 INTEGER,PARAMETER :: insertionsPerShot=500
-INTEGER :: numSigmaLoops=1
+INTEGER :: numSigmaLoops=10
 
 !==========================================
 !||||||||||| VARIABLES ||||||||||||||||||||
 !==========================================
+REAL*8 :: deBrogWL
 REAL*8 :: radiusShell
-REAL*8 :: sigma
 REAL*8 :: density
 REAL*8 :: bin_width,R
 REAL*8 :: box_size,min_sep
@@ -34,11 +34,16 @@ REAL*8, DIMENSION(3) :: chemInitPos
 REAL*8:: Vol
 INTEGER ::newTotalN
 
+REAL*8 :: sigma,sigmaChange,finalSigma
+REAL*8 :: initPot, finPot,potNew
+REAL*8 :: initVol, finVol
+
 REAL*8 :: P_dot,pressure
 
 INTEGER :: numInShell,numInHull
 INTEGER,DIMENSION(N) :: IDHull
-REAL*8,DIMENSION(3,N) :: shellPos, shellForce, shellVel
+REAL*8,DIMENSION(3,N) :: hullPos,shellPos, shellForce, shellVel
+REAL*8 :: avgB, avgB2, B
 
 REAL*8 :: curB, curB2
 REAL*8 :: curBlockB, curBlockB2
@@ -120,28 +125,31 @@ DO l = 1, numInsertions
     temp_cur = Temperature(Kin)
     energy = Kin + Potij
 
-    !CALL getPressure()
     !Write/Average appropriate quantities:
-    pressure_dat(t) = getPressure()
   END DO
 
-
+  CALL getPressure()
   !!! Try To insert a particle 
-
+  initPot = Potij
   !CALL tryInsertions()
   !curB = curB + curBlockB/numInsertions
   !curB2 = curB2 + curBlockB2/numInsertions
 
   CALL findPosShell()
-
+  call calcHull(shellPos,numInShell,initVol, numInHull, hullPos, IDHull)
+  
+  sigmaChange = (FinalSigma-sigma)/numSigmaLoops
   DO t=1, numSigmaLoops
     PRINT*, "Looking at sigma"
-    sigma =sigma+.1   !Fix me later!! 
+    sigma =sigma+sigmaChange
     CALL Relax()
   END DO
 
-  !DEALLOCATE(chemPos)
-  !DEALLOCATE(chemFtotal)
+  finPot = Potij+PotNew+Pressure*(finVol-initVol)
+  
+  B = EXP(-finPot/temp_cur)
+  avgB = avgB +B/numInsertions
+  avgB2 = B**2/numInsertions
 
 END DO
 
@@ -149,17 +157,18 @@ END DO
 !===========================================
 !|||||||| Post-Program calculations|||||||||
 !===========================================
-
+deBrogWL = 1/(2*pi*temp_cur)**.5d0
 
 !=================================
 !||||||| WRITE OUTPUTS||||||||||||
 !=================================
 
 Print*, "Average Energy Change: "
-print*, curB
+print*, avgB
 print*, "Energy variance: "
-print*, curB2-curB**2
-
+print*, avgB2-avgB**2
+Print*, "Chemical Potential: "
+Print*, -temp_cur*LOG(avgB/(density*deBrogWL**3))
 
 
 !=================================
@@ -167,6 +176,19 @@ print*, curB2-curB**2
 !=================================
 
 CONTAINS
+
+!SUBROUTINE printVisual(positions,numParticles,timeIndex, fName)
+  !IMPLICIT NONE
+  !REAL*8, DIMENSION(:,:) :: positions
+  !INTEGER :: numParticles, timeIndex,i
+
+  !OPEN(UNIT=26,STATUS="append",file=fName)
+  !  DO i=1, numParticles
+  !    WRITE(26,"(1x,i4)",ADVANCE="no")
+  !  END DO
+  !CLOSE(26)
+
+!END SUBROUTINE
 
 SUBROUTINE testInsertion
   IMPLICIT NONE
@@ -225,12 +247,15 @@ END SUBROUTINE
 
 SUBROUTINE relax
   IMPLICIT NONE
-  INTEGER ::i
-  REAL*8, DIMENSION(3,N) :: hullPos
-  REAL*8 :: volHull
+  INTEGER ::i,j
+  REAL*8 :: finVol
   DO i=1,200
+    !DO j=0,N
+    !  PRINT*, shellPos(:,j)
+    !END DO
+    print*, i
     !Calculate Convex Hull
-    call calcHull(shellPos,numInShell,volHull, numInHull, hullPos, IDHull)
+    call calcHull(shellPos,numInShell,finVol, numInHull, hullPos, IDHull)
     
     !CALL printHullResults(inShellPos,numInSHell,volHull,numInHull,posInHull,idInHull)
 
@@ -270,23 +295,31 @@ SUBROUTINE printHullResults(x,nx,v,ny,y,yID)
   
 END SUBROUTINE
 
-FUNCTION getPressure()
-  REAL*8::Pdot,P_reduced,P,getPressure
-  Pdot = sum( Dij*Fij)
-  P_reduced = 1 - 1/(3*N*Temp_cur)*Pdot
-  getPressure = P_reduced*temp_cur/density
-END FUNCTION
+SUBROUTINE getPressure()
+  IMPLICIT NONE
+  REAL*8::P_reduced,P
+  P_reduced = 1 - 1/(3*N*Temp_cur)*P_dot
+  Pressure = P_reduced*temp_cur/density
+END SUBROUTINE
 
 SUBROUTINE inputs     !User submitted input parameters
   PRINT*, "Input simulation density:"
   READ*, density
   print*,
   
-  print*, 'INPUT SIMULATION TEMPERATURE'
+  print*, 'Input simulation temperature: '
   read*, temp
   print*
   
-  print*, 'INPUT SIMULATION sigma'
+  print*, 'INPUT starting LJ Sigma for Relaxation: '
+  read*, sigma
+  print*
+
+  print*, "Input final LJ Sigma for relaxation: "
+  read*, finalSigma
+  print*
+
+  print*, "Input radius shell for making hull: "
   read*, radiusShell
   print*
 END SUBROUTINE !Inputs
@@ -346,6 +379,7 @@ END SUBROUTINE MoveParticles
 
 SUBROUTINE ChemMoveParticles
   shellVel=shellVel+shellForce*T_step/2.d0
+  print*, shellVel
   shellPos = shellPos + shellVel*T_step;
   call chem_update_forces
   shellVel=shellVel+shellForce*T_step/2.0d0
@@ -365,6 +399,7 @@ SUBROUTINE Update_Forces
   REAL*8::Mag2, Mag4, Mag7
   Ftotal = 0.d0
   Potij = 0.d0
+  P_dot = 0
   Do i = 1,N-1
     Do j = i+1,N
       
@@ -381,9 +416,7 @@ SUBROUTINE Update_Forces
       Ftotal(:,i) = Ftotal(:,i) + Fij;
       Ftotal(:,j) = Ftotal(:,j) - Fij;
       
-      Potij = Potij + Potential(Mag_Dij);
-     
-
+      Potij = Potij + Potential(Mag_Dij)
       P_dot = P_dot + DOT_PRODUCT(Dij,Fij)
 
     END DO
@@ -402,6 +435,7 @@ SUBROUTINE chem_Update_Forces
   !Regular interparticle forces
   shellForce = 0.d0
   Potij = 0.d0
+  PotNew =0.d0
   Do i = 1,numInShell
     Do j = 1,i-1
       
@@ -414,6 +448,7 @@ SUBROUTINE chem_Update_Forces
       shellForce(:,i) = shellForce(:,i) + Fij;
       shellForce(:,j) = shellForce(:,j) - Fij;
 
+      Potij = Potij + Potential(Mag_Dij)
     END DO
   END DO
 
@@ -429,16 +464,15 @@ SUBROUTINE chem_Update_Forces
     Fij = (48.d0*sigma12/(Mag_Dij)**7.0d0-24.d0*sigma6/(Mag_Dij)**4.0d0)*Dij
       
     shellForce(:,i) = shellForce(:,i) + Fij;
-    
+    PotNew =PotNew +Potential(Mag_Dij) 
   END DO
 
   !Pressure term
-  P = getPressure()
   DO i=1,numInHull
     k = IDHull(i)
     Dij = shellPos(:,k) - cheminitPos(:)
     Mag_Dij = DOT_PRODUCT(Dij,Dij)**.5d0
-    Fij = -4*pi*mag_dij*Dij
+    Fij = -4*pi*mag_dij*Dij*Pressure
     shellForce(:,k) = shellForce(:,k) + Fij
   END DO
 
