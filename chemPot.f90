@@ -13,6 +13,7 @@ INTEGER, PARAMETER :: eq_len=500, eq_len_avg=20
 REAL*8, PARAMETER :: Pi = datan(1.0d0)*4.0d0
 INTEGER,PARAMETER :: numInsertions=1
 INTEGER,PARAMETER :: insertionsPerShot=500
+INTEGER :: numSigmaLoops=1
 
 !==========================================
 !||||||||||| VARIABLES ||||||||||||||||||||
@@ -30,11 +31,14 @@ REAL*8, DIMENSION(3,N):: pos_init, pos_unbound
 REAL*8, DIMENSION(N):: rF=0.d0,rf_add
 REAL*8, DIMENSION(3):: Fij, Dij, momentum_cur
 REAL*8, DIMENSION(3) :: chemInitPos
-REAL*8, ALLOCATABLE::chemPos(:,:),chemFtotal(:,:),chemVel(:,:)
 REAL*8:: Vol
 INTEGER ::newTotalN
-INTEGER :: numSigmaLoops
+
 REAL*8 :: P_dot,pressure
+
+INTEGER :: numInShell,numInHull
+INTEGER,DIMENSION(N) :: IDHull
+REAL*8,DIMENSION(3,N) :: shellPos, shellForce, shellVel
 
 REAL*8 :: curB, curB2
 REAL*8 :: curBlockB, curBlockB2
@@ -52,6 +56,7 @@ REAL*8, DIMENSION(iteration_len) :: pressure_dat
 !====================================
 !|||||| Pre-program initialization|||
 !====================================
+
 
   CALL Inputs
   
@@ -115,22 +120,25 @@ DO l = 1, numInsertions
     temp_cur = Temperature(Kin)
     energy = Kin + Potij
 
-    CALL getPressure()
+    !CALL getPressure()
     !Write/Average appropriate quantities:
-    pressure_dat(t) = Pressure
+    pressure_dat(t) = getPressure()
   END DO
 
-  !!! Try To insert a particle 
-  print*, l
-  CALL tryInsertions()
-  curB = curB + curBlockB/numInsertions
-  curB2 = curB2 + curBlockB2/numInsertions
 
-  !CALL findPosShell()
-  !DO t=1, numSigmaLoops
-  !  sigma =sigma+.1   !Fix me later!! 
-  !  CALL Relax()
-  !END DO
+  !!! Try To insert a particle 
+
+  !CALL tryInsertions()
+  !curB = curB + curBlockB/numInsertions
+  !curB2 = curB2 + curBlockB2/numInsertions
+
+  CALL findPosShell()
+
+  DO t=1, numSigmaLoops
+    PRINT*, "Looking at sigma"
+    sigma =sigma+.1   !Fix me later!! 
+    CALL Relax()
+  END DO
 
   !DEALLOCATE(chemPos)
   !DEALLOCATE(chemFtotal)
@@ -159,6 +167,35 @@ print*, curB2-curB**2
 !=================================
 
 CONTAINS
+
+SUBROUTINE testInsertion
+  IMPLICIT NONE
+  REAL*8, DIMENSION(3) :: testPosition
+  INTEGER :: i
+
+  CALL RANDOM_NUMBER(testPosition)
+  testPosition = testPosition*box_size
+
+  DO i=1, N
+    
+  END DO
+
+END SUBROUTINE
+
+!SUBROUTINE makePairList
+!  IMPLICIT NONE
+!  INTEGER :: i,j
+!  REAL*8 :: Dist, Dist2
+
+!  DO i=1,N
+!    DO j=1,i-1
+      
+!      Dist = Pos(:,i) - Pos(:,j)
+!      Dist = Dij - NINT(dij/box_size)*box_size
+!      Dist2 = DOT_PRODUCT(Dist,Dist)    
+!    END DO
+!  END DO
+!END SUBROUTINE
 
 SUBROUTINE tryInsertions
   IMPLICIT NONE
@@ -189,9 +226,13 @@ END SUBROUTINE
 SUBROUTINE relax
   IMPLICIT NONE
   INTEGER ::i
-
+  REAL*8, DIMENSION(3,N) :: hullPos
+  REAL*8 :: volHull
   DO i=1,200
-    !Calculate convex Hull here
+    !Calculate Convex Hull
+    call calcHull(shellPos,numInShell,volHull, numInHull, hullPos, IDHull)
+    
+    !CALL printHullResults(inShellPos,numInSHell,volHull,numInHull,posInHull,idInHull)
 
     DO j=1,20
       CALL chemMoveParticles
@@ -200,12 +241,41 @@ SUBROUTINE relax
   
 END SUBROUTINE
 
-SUBROUTINE getPressure
-  REAL*8::Pdot,P_reduced,P
+SUBROUTINE printHullResults(x,nx,v,ny,y,yID)
+  IMPLICIT NONE
+  INTEGER :: i
+  REAL*8,DIMENSION(:,:) :: x,y
+  INTEGER, DIMENSION(:) :: yID
+  INTEGER :: nx,ny
+  REAL*8 :: v
+
+  PRINT*, "Points given to hull: "
+  DO i=1,nx
+    WRITE(*,*), x(:,i)
+  END DO
+
+  PRINT*, "Number points given to hull: "
+  PRINT*, nx
+
+  PRINT*, "Points returned from hull: "
+  DO i=1,ny
+    PRINT*, yID(i)
+  END DO
+
+  PRINT*, "Number points in Hull: "
+  PRINT*, ny
+
+  PRINT*, "Volume returned by Hull: "
+  PRINT*, v
+  
+END SUBROUTINE
+
+FUNCTION getPressure()
+  REAL*8::Pdot,P_reduced,P,getPressure
   Pdot = sum( Dij*Fij)
   P_reduced = 1 - 1/(3*N*Temp_cur)*Pdot
-  Pressure = P_reduced*temp_cur/density
-END SUBROUTINE
+  getPressure = P_reduced*temp_cur/density
+END FUNCTION
 
 SUBROUTINE inputs     !User submitted input parameters
   PRINT*, "Input simulation density:"
@@ -230,41 +300,36 @@ END SUBROUTINE Initialize
 
 SUBROUTINE findPosShell
   IMPLICIT NONE
-  INTEGER,DIMENSION(N) :: inShell
   REAL*8, DIMENSION(3) :: Dist
   REAL*8:: sigma2, Dist2
   INTEGER ::i,k
 
-  inShell =0
+  numInShell =0
   sigma2 = RadiusShell**2
 
   !Pick initial position of new particle
   CALL Random_Number(cheminitPos)
   cheminitPos= cheminitPos*box_Size
 
-  !Find the particles that are within sigma of new position
+  !Put all particle positions within shell in array, updating num in Shell
   DO i=1, N 
       Dist = Pos(:,i) - cheminitPos
       Dist = Dist - NINT(Dist/box_size)*box_size
       Dist2 = DOT_PRODUCT(Dist,Dist)
       IF(Dist2.LT.sigma2) THEN
-        inShell(i) =1
+        numInShell = numInShell + 1
+        shellPos(:,numInShell) = Pos(:,i)
+        shellVel(:,numInShell) = Vel(:,i)
       END IF
   END DO
 
-  newTotalN= SUM(inShell)
-  ALLOCATE(chemPos(3,newTotalN))
-  ALLOCATE(chemVel(3,newTotalN))
-  ALLOCATE(chemFtotal(3,newTotalN))
-  
-  !Make new array of positions
-  k=0
-  DO i=1, N
-    IF ( inShell(i).EQ.1) THEN
-      k=k+1
-      chemPos(:,k)= pos(:,i)
-    END IF
-  END DO 
+  !Fill the rest of the array with last point for hull purpose
+  IF (numInShell.LT.N) THEN
+    DO i=numInShell+1,N
+      shellPos(:,i) = chemInitPos
+    END DO
+  END IF
+
 END SUBROUTINE
 
 SUBROUTINE MoveParticles
@@ -280,13 +345,13 @@ SUBROUTINE MoveParticles
 END SUBROUTINE MoveParticles
 
 SUBROUTINE ChemMoveParticles
-  vel=vel+FTotal*T_step/2.d0
-  chemPos = chemPos + chemVel*T_step;
+  shellVel=shellVel+shellForce*T_step/2.d0
+  shellPos = shellPos + shellVel*T_step;
   call chem_update_forces
-  chemVel=chemVel+FTotal*T_step/2.0d0
+  shellVel=shellVel+shellForce*T_step/2.0d0
  
   !Boundary Conditions
-  chemPos = Modulo(Pos, box_size)
+  shellPos = Modulo(shellPos, box_size)
 END SUBROUTINE ChemMoveParticles
 
 !SUBROUTINE PlotParticles
@@ -328,27 +393,26 @@ END SUBROUTINE Update_Forces
 SUBROUTINE chem_Update_Forces
   IMPLICIT NONE
   INTEGER ::i,j
-  REAL*8:: sigma12, sigma6
-
+  REAL*8:: sigma12, sigma6,P
   !For each particle get total forces from
   ! Pressure
   ! Interparticle Forces
   ! New center particle with adjusted potential
 
   !Regular interparticle forces
-  Ftotal = 0.d0
+  shellForce = 0.d0
   Potij = 0.d0
-  Do i = 1,newTotalN-1
-    Do j = i+1,newTotalN
+  Do i = 1,numInShell
+    Do j = 1,i-1
       
-      Dij = chemPos(:,i) - chemPos(:,j)
+      Dij = shellPos(:,i) - shellPos(:,j)
       Dij = Dij - NINT(dij/box_size)*box_size
       
       Mag_Dij = DOT_PRODUCT(Dij, Dij) 
       Fij = (48.d0/(Mag_Dij**7.0d0)-24.d0/(Mag_Dij**4.0d0))*Dij
         
-      chemFtotal(:,i) = chemFtotal(:,i) + Fij;
-      chemFtotal(:,j) = chemFtotal(:,j) - Fij;
+      shellForce(:,i) = shellForce(:,i) + Fij;
+      shellForce(:,j) = shellForce(:,j) - Fij;
 
     END DO
   END DO
@@ -356,19 +420,27 @@ SUBROUTINE chem_Update_Forces
   !Adjusted potential center particle
   sigma12= sigma**12
   sigma6 = sigma**6
-  Do i = 1,newTotalN
+  Do i = 1,numInShell
     
-    Dij = chemPos(:,i) - cheminitPos(:)
+    Dij = shellPos(:,i) - cheminitPos(:)
     Dij = Dij - NINT(dij/box_size)*box_size
     
     Mag_Dij = DOT_PRODUCT(Dij, Dij)
     Fij = (48.d0*sigma12/(Mag_Dij)**7.0d0-24.d0*sigma6/(Mag_Dij)**4.0d0)*Dij
       
-    chemFtotal(:,i) = chemFtotal(:,i) + Fij;
+    shellForce(:,i) = shellForce(:,i) + Fij;
     
   END DO
 
   !Pressure term
+  P = getPressure()
+  DO i=1,numInHull
+    k = IDHull(i)
+    Dij = shellPos(:,k) - cheminitPos(:)
+    Mag_Dij = DOT_PRODUCT(Dij,Dij)**.5d0
+    Fij = -4*pi*mag_dij*Dij
+    shellForce(:,k) = shellForce(:,k) + Fij
+  END DO
 
 END SUBROUTINE
 
